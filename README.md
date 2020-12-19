@@ -6,5 +6,9 @@ This project is different from the usual applications of the OR-Tools routing so
 
 ![](data/gif.gif)
 
-More to come
+Other applications:
+
+Snow Shoveling and salting the roads
+
+Garbage Collection
 

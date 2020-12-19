@@ -4,13 +4,14 @@ from ortools.constraint_solver import pywrapcp
 import psycopg2
 import ast
 from psycopg2 import sql
+import json
 
 
-with open("dist_matrix.txt") as f:
-    x = f.read()
+def read_matrix_from_json():
+    with open('distance_matrix.json') as f:
+        matrix = json.load(f)
 
-x = ast.literal_eval(x)
-
+    return matrix['matrix']
 
 
 def create_data_madel(input):
@@ -19,6 +20,7 @@ def create_data_madel(input):
     data['num_vehicles'] = 1
     data['depot'] = 0
     return data
+
 
 def add_distance_callback(routing, manager, data):
     def distance_callback(from_index, to_index):
@@ -34,7 +36,7 @@ def add_distance_callback(routing, manager, data):
     routing.AddDimension(
         transit_callback_index,
         0,  # no slack
-        1_000_000_000,  # vehicle maximum travel distance
+        100_000_000,  # vehicle maximum travel distance
         True,  # start cumul to zero
         dimension_name)
     distance_dimension = routing.GetDimensionOrDie(dimension_name)
@@ -62,12 +64,12 @@ def get_routes(data, solution, routing, manager):
     foo.pop(-1)
     foo.append(-1)
 
-
     routes.append(foo)
 
   return routes
 
-def main(input, time=None, solution_limit=None, lns_time=None ,penalty=None, log_search=bool, first_solution_method=None ,second_solution_method=None):
+
+def routing_solver(input, time=None, solution_limit=None, lns_time=None ,penalty=None, log_search=bool, first_solution_method=None ,second_solution_method=None):
     """Entry point of the program."""
     # Instantiate the data problem.
     data = create_data_madel(input)
@@ -172,59 +174,49 @@ def main(input, time=None, solution_limit=None, lns_time=None ,penalty=None, log
         return routes
 
 
-# new_matrix = []
-# for i in range(900):
-#     row = []
-#     temp = x[i]
-#     for j in range(900):
-#         row.append(temp[j])
-#     new_matrix.append(row)
-# print(len(x))
-routes = main(input=x,
-              time=10,
-              penalty=100_000_000,
-              first_solution_method="PATH_CHEAPEST_ARC",
-              second_solution_method="GUIDED_LOCAL_SEARCH")
-
-print(len(routes[0]))
-
-with open("routes.txt", "w") as f:
-    f.write(f"{routes}")
-
-# routes = ast.literal_eval(routes)
-
-con = psycopg2.connect(
-        host = "localhost",
-        database = "chicago",
-        user = "postgres",
-        password = "password"
+def db_connect(host=None, database=None, user=None, password=None):
+    global con
+    con = psycopg2.connect(
+        host = f"{host}",
+        database = f"{database}",
+        user = f"{user}",
+        password = f"{password}"
         )
 
-cur = con.cursor()
 
-cur.execute(f"select * from distance_matrix where start_vid = {1};")
-items = cur.fetchall()
-items = sorted(items, key=lambda x: x[1])
+def get_new_routes(routes):
+    db_connect(host="localhost", database="chicago", user="postgres", password="password")
+    cur = con.cursor()
 
-routing_indices = []
+    cur.execute(f"select * from distance_matrix where start_vid = {1};")
+    items = cur.fetchall()
+    items = sorted(items, key=lambda x: x[1])
 
-for i in items:
-    routing_indices.append(i[1])
+    routing_indices = []
 
-routing_indices.insert(0,1)
-# routing_indices.insert(0,0)
-routing_indices.append(-1)
+    for i in items:
+        routing_indices.append(i[1])
 
-new_routes = []
-for i in routes[0]:
-    new_routes.append(routing_indices[i])
+    routing_indices.insert(0,1)
+    # routing_indices.insert(0,0)
+    routing_indices.append(-1)
 
-new_routes.pop(-1)
-# print(new_routes)
+    new_routes = []
+    for i in routes[0]:
+        new_routes.append(routing_indices[i])
+
+    new_routes.pop(-1)
+
+    with open("routes.txt", "w") as f:
+        f.write(f"{new_routes}")
+
+    return new_routes
+
 
 def sequence_to_table(sequence, table_name):
-    insert_query_string = """insert into {} (sweep,linkid,geom)
-    select %s,%s,c.curb_geom as the_geom
+    db_connect(host="localhost", database="chicago", user="postgres", password="password")
+    insert_query_string = """insert into {} (sweep,linkid,geom, geojson)
+    select %s,%s,c.curb_geom, ST_AsGeoJSON(ST_Transform(c.curb_geom,4326)) as the_geom
     from curbs_v2_graph c
     where c.curbid =%s"""
     insert_query = sql.SQL(
@@ -237,11 +229,13 @@ def sequence_to_table(sequence, table_name):
                    ).format(sql.Identifier(table_name)))
         cur.execute(
             sql.SQL("""
-CREATE TABLE {} (
-   id serial, linkid integer,
-   sweep boolean default TRUE,
-   geom geometry(LINESTRING,4326) )
+    CREATE TABLE {} (
+       id serial, linkid integer,
+       sweep boolean default TRUE,
+       geom geometry(LINESTRING,4326),
+       geojson text)
                    """).format(sql.Identifier(table_name)))
+        geojson = []
         for idx, row in enumerate(sequence):
             # basic idea.  Save a table.
             # Each row has shape,sequence number
@@ -249,41 +243,97 @@ CREATE TABLE {} (
             linkid = row
             cur.execute(
                insert_query,(sweep,linkid,linkid))
+
+        cur.execute(f"SELECT geojson FROM routing_output ")
+        x = cur.fetchall()
+        # geojson.append(x)
     con.commit()
 
+    return x
+
+
+def get_geojson():
+    db_connect(host="localhost", database="chicago", user="postgres", password="password")
+    insert_query_string = """
+                              select geojson from routing_output
+
+                            """
+    insert_query = sql.SQL(
+                     insert_query_string
+                          )
+
+
+
+def get_distance_matrix():
+    db_connect(host="localhost", database="chicago", user="postgres", password="password")
+
+    cur = con.cursor()
+
+    cur.execute(f"select * from distance_matrix where start_vid = {1};")
+    items = cur.fetchall()
+    items = sorted(items, key=lambda x: x[1])
+
+    routing_indices = []
+
+    for i in items:
+        routing_indices.append(i[1])
+
+    matrix = []
+
+    for idx, i in enumerate(routing_indices):
+        row = []
+        cur.execute(f"select * from distance_matrix where start_vid = {i};")
+        items = cur.fetchall()
+        items = sorted(items, key=lambda x: x[1])
+        if len(items) < len(routing_indices)-1:
+            print(i)
+
+        for j in items:
+            row.append(int(j[2]))
+
+        if idx != len(routing_indices)-1:
+            row.insert(idx, 0)
+        else:
+            row.append(0)
+
+        matrix.append(row)
+
+    con.close()
+
+    return matrix
+
+
+input = read_matrix_from_json()
+
+routes = get_new_routes(routing_solver(input,
+                                       time=10,
+                                       first_solution_method="PATH_CHEAPEST_ARC",
+                                       second_solution_method="GUIDED_LOCAL_SEARCH"))
+
 routing_output = "routing_output"
-sequence_to_table(new_routes, routing_output)
-# print(len(x[1800]))
-# for idx, i in enumerate(range(len(x))):
-#     if len(x[i]) < 1823:
-#         print(idx)
+
+geojson = sequence_to_table(routes, routing_output)
+# print(json.loads(geojson[0][0])["coordinates"][0])
+# print(routes)
+# print(json.loads(geojson[0][0])["coordinates"][:])
+coords = []
+for i in range(len(geojson)):
+    coords.append(json.loads(geojson[i][0])["coordinates"][0])
+    coords.append(json.loads(geojson[i][0])["coordinates"][1])
 
 
-# matrix = []
+foo = {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": [],
+          "geometry": {
+            "type": "LineString",
+            "coordinates": coords[:100]
+          }
+        }
+      ]
+       }
 
-
-# # print(len(routing_indices))
-# for idx, i in enumerate(routing_indices):
-#     row = []
-#     cur.execute(f"select * from distance_matrix where start_vid = {i};")
-#     items = cur.fetchall()
-#     items = sorted(items, key=lambda x: x[1])
-#     if len(items) < len(routing_indices)-1:
-#         print(i)
-
-#     for j in items:
-#         row.append(int(j[2]))
-
-#     if idx != len(routing_indices)-1:
-#         row.insert(idx, 0)
-#     else:
-#         row.append(0)
-
-#     matrix.append(row)
-
-# with open("dist_matrix.txt", "w") as f:
-#     f.write(f"{matrix}")
-# print(matrix[1801])
-
-con.close()
-
+print(json.dumps(foo))

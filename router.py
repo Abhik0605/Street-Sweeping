@@ -263,7 +263,6 @@ def get_geojson():
                           )
 
 
-
 def get_distance_matrix():
     db_connect(host="localhost", database="chicago", user="postgres", password="password")
 
@@ -303,37 +302,43 @@ def get_distance_matrix():
     return matrix
 
 
-input = read_matrix_from_json()
+def convert_to_geojson(routes):
+    routing_output = "routing_output"
 
-routes = get_new_routes(routing_solver(input,
-                                       time=10,
-                                       first_solution_method="PATH_CHEAPEST_ARC",
-                                       second_solution_method="GUIDED_LOCAL_SEARCH"))
-
-routing_output = "routing_output"
-
-geojson = sequence_to_table(routes, routing_output)
-# print(json.loads(geojson[0][0])["coordinates"][0])
-# print(routes)
-# print(json.loads(geojson[0][0])["coordinates"][:])
-coords = []
-for i in range(len(geojson)):
-    coords.append(json.loads(geojson[i][0])["coordinates"][0])
-    coords.append(json.loads(geojson[i][0])["coordinates"][1])
+    geojson = sequence_to_table(routes, routing_output)
+    # print(json.loads(geojson[0][0])["coordinates"][0])
+    # print(routes)
+    # print(json.loads(geojson[0][0])["coordinates"][:])
+    coords = []
+    for i in range(len(geojson)):
+        coords.append(json.loads(geojson[i][0])["coordinates"][0])
+        coords.append(json.loads(geojson[i][0])["coordinates"][1])
 
 
-foo = {
-      "type": "FeatureCollection",
-      "features": [
-        {
-          "type": "Feature",
-          "properties": [],
-          "geometry": {
-            "type": "LineString",
-            "coordinates": coords[:100]
-          }
-        }
-      ]
-       }
+    foo = {
+          "type": "FeatureCollection",
+          "features": [
+            {
+              "type": "Feature",
+              "properties": [],
+              "geometry": {
+                "type": "LineString",
+                "coordinates": coords
+              }
+            }
+          ]
+           }
 
-print(json.dumps(foo))
+    return json.dumps(foo)
+
+
+
+# input = read_matrix_from_json()
+
+# routes = get_new_routes(routing_solver(input,
+#                                        time=10,
+#                                        first_solution_method="PATH_CHEAPEST_ARC",
+#                                        second_solution_method="GUIDED_LOCAL_SEARCH"))
+
+# output = convert_to_geojson(routes)
+
